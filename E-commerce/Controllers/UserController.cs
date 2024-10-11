@@ -5,6 +5,7 @@ using E_commerce.Models;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Reflection.Metadata.Ecma335;
+using Microsoft.EntityFrameworkCore;
 
 
 namespace E_commerce.Controllers
@@ -42,9 +43,16 @@ namespace E_commerce.Controllers
 
         }
 
+        [HttpGet]
+        public async Task<IActionResult> GetUsers()
+        {
+            var users = await _context.Users.ToListAsync();
+            return Ok(users);
+        }
+
 
     }
 
 
-    }
+    
 }
