@@ -16,6 +16,12 @@ namespace E_commerce.Models
         [Required]
         public string Description { get; set; }
 
+        public string category { get; set; }
 
+        public int quantity { get; set; } 
+
+        public bool inStock { get; set; }
+
+     public Product() { }
     }
 }
