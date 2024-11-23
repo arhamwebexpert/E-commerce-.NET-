@@ -1,0 +1,7 @@
+﻿global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "my-api"
+    static_configs:
+      - targets: ["host.docker.internal:5091"] # Replace with your API's host and port

@@ -18,18 +18,42 @@ namespace E_commerce.Controllers
 
         // POST: api/product
         [HttpPost]
-        public async Task<IActionResult> CreateProduct([FromBody] Product product)
+        public async Task<IActionResult> CreateProduct([FromForm] Product product, [FromForm] IFormFile image)
         {
-            if (ModelState.IsValid)
+            // Step 1: Manually check if the image file is provided
+            if (image == null)
             {
-                _context.Products.Add(product);
-                await _context.SaveChangesAsync();  // Save changes to the database
-                return Ok(product);
+                return BadRequest(new { Errors = new[] { "Image file is required." } });
             }
 
-            return BadRequest(ModelState);  // Return validation errors if any
-        }
+            // Define the path to save images
+            var uploadPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "images");
 
+            // Create the directory if it doesn't exist
+            if (!Directory.Exists(uploadPath))
+            {
+                Directory.CreateDirectory(uploadPath);
+            }
+
+            // Generate a unique file name to avoid overwriting files with the same name
+            var fileName = Guid.NewGuid().ToString() + Path.GetExtension(image.FileName);
+
+            // Step 2: Save the image file to the server
+            var filePath = Path.Combine(uploadPath, fileName);
+            using (var fileStream = new FileStream(filePath, FileMode.Create))
+            {
+                await image.CopyToAsync(fileStream);
+            }
+
+            // Step 3: Set ImageUrl with the relative path to the image
+            product.ImageUrl = "/images/" + fileName;
+
+            // Step 4: Add product to the database and save
+            _context.Products.Add(product);
+            await _context.SaveChangesAsync();
+
+            return Ok(product);
+        }
         // GET: api/product
         [HttpGet]
         public async Task<IActionResult> GetProducts()
@@ -54,7 +78,7 @@ namespace E_commerce.Controllers
         }
 
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateUser(int id, [FromBody] Product updateProduct)
+        public async Task<IActionResult> Update(int id, [FromBody] Product updateProduct)
         {
             if (id != updateProduct.Id)
             {
@@ -68,25 +92,25 @@ namespace E_commerce.Controllers
 
             var product = await _context.Products.FindAsync(id);
 
-            if (product==null)
+            if (product == null)
             {
-                return NotFound(new { message = " not found" });
+                return NotFound(new { message = "Product not found" });
             }
 
-           
-            product.Id = updateProduct.Id;
-            product.quantity = updateProduct.quantity;
-            product.inStock= updateProduct.inStock;
-            product.category = updateProduct.category;
+            // Update properties including the new ImageUrl field
             product.Name = updateProduct.Name;
             product.Price = updateProduct.Price;
             product.Description = updateProduct.Description;
-
+            product.Category = updateProduct.Category;
+            product.Quantity = updateProduct.Quantity;
+            product.InStock = updateProduct.InStock;
+            product.ImageUrl = updateProduct.ImageUrl;
 
             await _context.SaveChangesAsync();
 
             return NoContent();  // Status code 204 with no response body
         }
+
 
     }
 }
