@@ -4,14 +4,29 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using App.Metrics;
+using App.Metrics.Formatters.Prometheus;
 using Prometheus;
+using E_commerce.Controllers;
+using Microsoft.Identity.Client;
+using Serilog;
+using Serilog.Sinks.Grafana.Loki;
+using Microsoft.Extensions.Logging;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("logs/log.txt")
+    .CreateLogger();
+
+builder.Host.UseSerilog();
 builder.Services.AddControllers();
 
-var key = Encoding.ASCII.GetBytes("YourSuperSecretKey"); // Store this key securely (e.g., environment variables)
 
+// Add JWT Authentication
+var key = Encoding.ASCII.GetBytes("YourSuperSecretKey"); // Replace with a secure key stored in environment variables
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -28,67 +43,106 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// Configure Entity Framework and DbContext
+// Configure Entity Framework and ApplicationDbContext
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-builder.WebHost.ConfigureKestrel(options =>
-{
-    options.ListenLocalhost(5091); // Bind explicitly to localhost
-});
-
+// Add Identity
 builder.Services.AddDefaultIdentity<IdentityUser>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddEntityFrameworkStores<ApplicationDbContext>();
-builder.WebHost.UseUrls("http://0.0.0.0:5091");
 
+// Add CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReactApp", policyBuilder =>
     {
-        policyBuilder.WithOrigins("http://localhost:3001", "http://192.168.100.67:3001")  // Use the correct React port
+        policyBuilder.WithOrigins("http://localhost:3001")
                      .AllowAnyMethod()
                      .AllowAnyHeader()
-                     .AllowCredentials(); // If you're using cookies or credentials
+                     .AllowCredentials();
     });
-
 });
 
+// Configure App Metrics
+var metrics = AppMetrics.CreateDefaultBuilder()
+    .OutputMetrics.AsPrometheusPlainText()
+    .Build();
+
+builder.Services.AddMetrics(metrics);
+builder.Services.AddMetricsReportingHostedService();
+builder.Services.AddMetricsTrackingMiddleware();
+
+builder.Services.AddMetricsEndpoints(options =>
+{
+    options.MetricsEndpointOutputFormatter = new MetricsPrometheusTextOutputFormatter(); // Set Prometheus formatter
+});
+builder.Services.AddMetricsTrackingMiddleware(); // Enables request metrics tracking
+
+// Configure Kestrel to listen on specific ports
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5091); // Allow connections from any IP on port 5091
+});
+
+// Set explicit URLs for the web host
+builder.WebHost.UseUrls("http://localhost:5091", "http://arham:5091");
+
+// Build the application
 var app = builder.Build();
 
+// Configure middleware pipeline
 
-app.UseRouting();  // Routing middleware should be before authorization
-app.UseHttpMetrics(); // Tracks HTTP request metrics.
-
-app.UseEndpoints(endpoints =>
-{
-    // Map controllers
-    endpoints.MapControllers();
-
-    // Map metrics endpoint for Prometheus scraping
-    endpoints.MapMetrics("/metrics");
-});
-
-// Developer exception page for development environment
+// Developer exception page for development
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 }
 
+// Enable HTTPS redirection (if applicable)
+app.UseHttpsRedirection();
+
+app.Use(async (context, next) =>
+{
+    // Resolve IMetrics from the DI container
+    var metrics = context.RequestServices.GetService<App.Metrics.IMetrics>();
+
+    if (metrics != null)
+    {
+        using (metrics.Measure.Timer.Time(CustomMetrics.RequestTimer))
+        {
+            await next.Invoke();
+        }
+
+        var responseSize = context.Response.ContentLength ?? 0;
+        metrics.Measure.Histogram.Update(CustomMetrics.ResponseSizeHistogram, responseSize);
+    }
+    else
+    {
+        await next.Invoke();
+    }
+});
+
+
+// Enable CORS
+app.UseCors("AllowReactApp");
+
+// Add App Metrics middleware for tracking and exposing metrics
+app.UseMetricsAllMiddleware(); // Middleware to collect metrics
+app.UseMetricsEndpoint(); // Expose the /metrics endpoint
+
+// Add Prometheus HTTP metrics
+app.UseHttpMetrics(); // Adds HTTP request metrics
+
+// Enable routing
+app.UseRouting();
+
+// Enable authentication and authorization
 app.UseAuthentication();
 app.UseAuthorization();
+// app.UseStaticFiles();
+// Map Prometheus metrics and controllers
+app.MapMetrics(); // Maps the Prometheus /metrics endpoint
+app.MapControllers(); // Maps API controllers
 
-// Enable CORS for the React app
-app.UseDeveloperExceptionPage();
-
-app.UseCors("AllowReactApp");
-app.UseStaticFiles(); // This should be included in your pipeline configuration
-
-
-
-app.UseAuthorization(); // Keep this only if you are using authorization in your app
-app.UseStaticFiles();
-
-// Map controller routes
-app.MapControllers();
-
+// Run the application
 app.Run();
